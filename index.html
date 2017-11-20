@@ -184,7 +184,7 @@
             
               <i class="menu-item-icon fa fa-fw fa-home"></i> <br />
             
-            Accueil
+            Home
           </a>
         </li>
       
@@ -250,7 +250,7 @@
         
           <h1 class="post-title" itemprop="name headline">
                 
-                <a class="post-title-link" href="/2017/11/20/Android常见内存泄露总结与预防.html" itemprop="url">Android常见内存泄露总结与预防</a></h1>
+                <a class="post-title-link" href="/2017/11/20/Android常见内存泄露总结与预防.html" itemprop="url">针对OOM进行内存优化的常见套路</a></h1>
         
 
         <div class="post-meta">
@@ -260,7 +260,7 @@
                 <i class="fa fa-calendar-o"></i>
               </span>
               
-                <span class="post-meta-item-text">Posté le</span>
+                <span class="post-meta-item-text">Posted on</span>
               
               <time title="Post created" itemprop="dateCreated datePublished" datetime="2017-11-20T10:06:35+08:00">
                 2017-11-20
@@ -302,8 +302,59 @@
       
         
           
-            <ol>
-<li>OOM发生的原因：</li>
+            <p>Android开发过程中总会在意想不到的的地方出现一些OOM的错误，类似于下面的代码：<br><figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Caused by: java.lang.OutOfMemoryError</span><br><span class="line">at java.io.ByteArrayOutputStream.expand(ByteArrayOutputStream.java:91)</span><br><span class="line">at java.io.ByteArrayOutputStream.write(ByteArrayOutputStream.java:201)</span><br><span class="line">at com.fanli.android.base.general.util.FileUtil.InputStreamToString(FileUtil.java:400)</span><br><span class="line">at com.fanli.android.base.general.util.FileUtil.readStringFromInputStream(FileUtil.java:210)</span><br></pre></td></tr></table></figure></p>
+<p><strong>1. 一些简单的背景知识</strong></p>
+<ol>
+<li><p>进程的地址空间<br>在32位操作系统中，进程的地址空间为0到4GB,示意图如下：<br><img src="/images/ProcessMemory.png" alt=""><br>这里主要说明一下Stack和Heap：<br>Stack空间：（进栈和出栈）由操作系统控制，其中主要存储 函数地址、函数参数、局部变量 等等。<br>所以Stack空间不需要很大，一般为几MB大小。<br>Heap空间：使用由程序员控制，程序员可以使用malloc、new、free、delete等函数调用来操作这片地址空间。<br>Heap为程序完成各种复杂任务提供内存空间，所以空间比较大，一般为几百MB到几GB。<br><strong>正是因为Heap空间由程序员管理，所以容易内存出现使用不当而导致严重问题。</strong></p>
+</li>
+<li><p>Android的进程一般分为Native进程和Java进程.</p>
+<ol>
+<li>native进程：采用C/C++实现，不包含dalvik实例的linux进程**，/system/bin/目录下面的程序文件运行后都是以native进程形式存在的。比如/system/bin/surfaceflinger、/system/bin/rild、procrank等就是native进程。</li>
+<li>java进程：实例化了dalvik虚拟机实例的linux进程，进程的入口main函数为java函数。 dalvik虚拟机实例的宿主进程是fork()系统调用创建的linux进程，所以每一个Android上的java进程实际上就是一个linux进程，只是进程中多了一个dalvik虚拟机实例。</li>
+</ol>
+</li>
+<li><p>进程中的对应的Heap空间内存（堆内存）也同样分为两种：</p>
+<ol>
+<li>C/C++申请的内存空间在Native Heap中</li>
+<li>Java申请的内存空间在dalvik heap中<br>其中Android系统针对每一个具体Java进程的dalvik heap都会设定一个具体的阀值，<strong>当Java进程申请的空间超出这个阀值时就会抛出OOM异常</strong>，也就是说<strong>OOM仅与Java进程相关，且即使在RAM充足的情况下，也是可能发生OOM的</strong>。<br>具体的dalvik heap内存阀值与Android机型ROM在编译时的设置有关，具体的大小可以执行下面的代码查看：<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">adb shell getprop | grep dalvik.vm.heap*</span><br></pre></td></tr></table></figure>
+</li>
+</ol>
+</li>
+<li><p>Android对应的GC操作<br>当虚拟机内存使用接近上限时，Android系统将自动触发Java的GC（Garbage Collection）操作，Android中GC的具体机制可以参考<a href="http://www.jianshu.com/p/5db05db4f5ab" target="_blank" rel="noopener">这篇文章</a>。</p>
+</li>
+</ol>
+<p><strong>Android不是用GC会自动回收资源么，为什么app的那些不用的资源不回收呢？</strong><br>Android的GC是按照特定的算法回收程序不用的内存资源，避免app的内存申请越积越多，但GC一般回收的资源是那些无主的对象内存或者软饮用的资源，或者更软引用的引用资源。但是如果发生内存泄露，例如某个Activity一直被静态变量引用无法释放。当重新进入该Activity时又会new出一个新的实例。对应的内存实例越来越多，泄露的内存又无法通过gc进行释放，最后内存耗尽导致OOM。</p>
+<p><strong>2. 常用的避免内存泄露的套路</strong><br>由于绝大多数发生OOM的情况都是由内存泄露引起的，针对内存泄露常用的一些方案，总结如下：<br><strong>常见的内存泄露：</strong><br>a. 非静态内部类内存泄露<br>在Activity中创建非静态内部类，非静态内部类会持有Activity的隐式引用，若内部类生命周期长于Activity，会导致Activity实例无法被回收。（屏幕旋转后会重新创建Activity实例，如果内部类持有引用，将会导致旋转前的实例无法被回收）。<br>解决方案：如果一定要使用内部类，就改用static内部类，在内部类中通过WeakReference的方式引用外界资源。</p>
+<p>正确的代码示例：<br><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">static</span> <span class="class"><span class="keyword">class</span> <span class="title">ImageDownloadTask</span> <span class="keyword">extends</span> <span class="title">AsyncTask</span>&lt;<span class="title">String</span>, <span class="title">Void</span>, <span class="title">Bitmap</span>&gt; </span>&#123;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">private</span> String url;</span><br><span class="line">        <span class="keyword">private</span> WeakReference&lt;PhotoAdapter&gt; photoAdapter;</span><br><span class="line"></span><br><span class="line">        <span class="function"><span class="keyword">public</span> <span class="title">ImageDownloadTask</span><span class="params">(PhotoAdapter photoAdapter)</span> </span>&#123;</span><br><span class="line">            <span class="keyword">this</span>.photoAdapter = <span class="keyword">new</span> WeakReference&lt;PhotoAdapter&gt;(photoAdapter);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="function"><span class="keyword">protected</span> Bitmap <span class="title">doInBackground</span><span class="params">(String... params)</span> </span>&#123;</span><br><span class="line">            <span class="comment">//在后台开始下载图片</span></span><br><span class="line">            url = params[<span class="number">0</span>];</span><br><span class="line">            Bitmap bitmap = photoAdapter.get().loadBitmap(url);</span><br><span class="line">            <span class="keyword">if</span> (bitmap != <span class="keyword">null</span>) &#123;</span><br><span class="line">                <span class="comment">//把下载好的图片放入LruCache中</span></span><br><span class="line">                String key = MD5Tools.decodeString(url);</span><br><span class="line">                photoAdapter.get().put(key, bitmap);</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> bitmap;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onPostExecute</span><span class="params">(Bitmap bitmap)</span> </span>&#123;</span><br><span class="line">            <span class="keyword">super</span>.onPostExecute(bitmap);</span><br><span class="line">            <span class="comment">//把下载好的图片显示出来</span></span><br><span class="line">            ImageView mImageView = (ImageView)     photoAdapter.get().mGridView.get().findViewWithTag(MD5Tools.decodeString(url));</span><br><span class="line">            <span class="keyword">if</span> (mImageView != <span class="keyword">null</span> &amp;&amp; bitmap != <span class="keyword">null</span>) &#123;</span><br><span class="line">                mImageView.setImageBitmap(bitmap);</span><br><span class="line">                photoAdapter.get().mDownloadTaskList.remove(<span class="keyword">this</span>);<span class="comment">//把下载好的任务移除</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure></p>
+<p>b. 匿名内部类内存泄漏<br>跟非静态内部类一样，匿名内部类也会持有外部类的隐式引用，比较常见的情况有，耗时Handler，耗时Thread，都会造成内存泄漏，解决方式也是static+WeakReference，下面给出正确写法。<br>Handler的正确写法：<br><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="class"><span class="keyword">class</span> <span class="title">MyHandler</span> <span class="keyword">extends</span> <span class="title">Handler</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> WeakReference&lt;Context&gt; context;</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">private</span> <span class="title">MyHandler</span><span class="params">(Context context)</span> </span>&#123;</span><br><span class="line">        <span class="keyword">this</span>.context = <span class="keyword">new</span> WeakReference&lt;Context&gt;(context);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">handleMessage</span><span class="params">(Message msg)</span> </span>&#123;</span><br><span class="line">        <span class="keyword">switch</span> (msg.what) &#123;</span><br><span class="line"></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> MyHandler mHandler = <span class="keyword">new</span> MyHandler(<span class="keyword">this</span>);</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Runnable sRunnable = <span class="keyword">new</span> Runnable() &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">    &#125;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="function"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title">onCreate</span><span class="params">(Bundle savedInstanceState)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">super</span>.onCreate(savedInstanceState);</span><br><span class="line">    setContentView(R.layout.activity_home);</span><br><span class="line">    <span class="comment">//  发送一个10分钟后执行的一个消息</span></span><br><span class="line">    mHandler.postDelayed(sRunnable, <span class="number">600000</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></p>
+<p>Thread的正确写法：<br><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="class"><span class="keyword">class</span> <span class="title">MyThread</span> <span class="keyword">extends</span> <span class="title">Thread</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">run</span><span class="params">()</span> </span>&#123;</span><br><span class="line">        <span class="keyword">while</span> (<span class="keyword">true</span>) &#123;</span><br><span class="line">            <span class="comment">// TODO 耗时任务</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">new</span> MyThread().start();</span><br></pre></td></tr></table></figure></p>
+<p>c. Context持有导致内存泄漏<br>Activity Context被传递到其他实例中，这可能导致自身被引用而发生泄漏。<br>对于大部分非必须使用Activity Context的情况（创建Dialog的Context必须是Activity Context），应该使用Application Context。</p>
+<p>d. 记得注销监听器和广播<br>注册监听器的时候会add Listener，不要忘记在不需要的时候remove掉Listener</p>
+<p>e. 谨慎使用单例中不合理的持有<br>单例中的对象生命周期与应用一致，注意不要在单例中进行不必要的外界引用持有。如果一定要引用外部变量，需要在外部变量生命周期结束的时候接触引用（赋为null）</p>
+<p>f. 一定要记得关闭无用连接<br>在onDestory中关闭Cursor，I/O，数据库，网络的连接用完记得关闭</p>
+<p>g. 集合中的内存泄漏<br>我们通常把一些对象的引用加入到了集合容器（比如ArrayList）中，当我们不需要该对象时，并没有把它的引用从集合中清理掉，这样这个集合就会越来越大。如果这个集合是static的话，那情况就更严重了。所以要在退出程序之前，将集合里的东西clear，然后置为null，再退出程序。</p>
+<p><strong>3. 常用的内存优化套路</strong><br>当APP使用的内存较大时为了避免因为达到使用上限的阀值，也可以进行这方面的一些优化：</p>
+<ol>
+<li>使用轻量的数据结构<br> 使用ArrayMap/SparseArray来代替HashMap，ArrayMap/SparseArray是专门为移动设备设计的高效的数据结构。<br> HashMap的缺点：<br> （1）就算没有数据，也需要分配默认16个元素的数组（2）一旦数据量达到Hashmap限定容量的75%，就将按两倍扩容<br> ArrayMap/SparseArray针对HashMap的主要优点是单个Entry占用内存低且每次增加元素是size++<br> ArrayMap/SparseArray缺陷：使用二分查找法的效率低于HashMap对应的效率<br> 更加详细的原因可以参考<a href="http://blog.csdn.net/u010687392/article/details/47809295" target="_blank" rel="noopener">这篇文章</a></li>
+<li>不要使用Enum<br> Android中使用枚举类型将会显著增加dex的体积，并且会产生额外的内存占用<br> 更加详细的原因可以参考<a href="http://www.csdn.net/article/2015-08-12/2825447-android-performance-patterns-season-3/2" target="_blank" rel="noopener">这篇文章</a></li>
+<li>不要使用String进行字符串拼接<br> 严格的讲，String拼接只能归结到内存抖动中，因为产生的String副本能够被GC，不会造成内存泄露。<br> 频繁的字符串拼接，使用StringBuffer或者StringBuilder代替String，可以在一定程度上避免OOM和内存抖动。<br> 更加详细的介绍可以参考<a href="https://www.cnblogs.com/sevenlin/p/sevenlin_StringBuffer_StringBuilder20150806.html" target="_blank" rel="noopener">这篇文章</a></li>
+<li>资源文件需要选择合适的文件夹进行存放<br> hdpi/xhdpi/xxhdpi等等不同dpi的文件夹下的图片在不同的设备上会经过scale的处理。例如我们只在hdpi的目录下放置了一张100100的图片，那么根据换算关系，xxhdpi的手机去引用那张图片就会被拉伸到200200。需要注意到在这种情况下，内存占用是会显著提高的。对于不希望被拉伸的图片，需要放到assets或者nodpi的目录下</li>
+<li>谨慎使用static对象<br> static对象的生命周期过长，应该谨慎使用</li>
+<li>恰当的使用Bitmap<ol>
+<li>及时的销毁<br>在用完Bitmap时，要及时的bitmap.recycle( )掉。<br>注意，recycle( )并不能确定立即就会将Bitmap释放掉，但是会给虚拟机一个暗示：“该图片可以释放了”。</li>
+<li>设置采样率<br>有时候，我们要显示的区域很小，没有必要将整个图片都加载出来，而只需要记载一个缩小过的图片，这时候可以设置一定的采样率，那么就可以大大减小占用的内存。如下面的代码：<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> ImageView preview;    </span><br><span class="line">BitmapFactory.Options options = newBitmapFactory.Options();  </span><br><span class="line"><span class="comment">// 图片宽高都为原来的二分之一，即图片为原来的四分之一   </span></span><br><span class="line">options.inSampleSize = <span class="number">2</span>;</span><br><span class="line"></span><br><span class="line">Bitmap bitmap = BitmapFactory.decodeStream(cr.openInputStream(uri), </span><br><span class="line">      <span class="keyword">null</span>, options); preview.setImageBitmap(bitmap);</span><br></pre></td></tr></table></figure>
+</li>
+</ol>
+</li>
+</ol>
+<p><strong>4. 内存溢出时一些可能的脑洞套路</strong></p>
+<ol>
+<li><p>虚拟机栈和本地方法栈溢出<br>如果线程请求的栈深度大于虚拟机所允许的最大深度，将抛出StackOverflowError异常。<br>如果虚拟机在扩展栈时无法申请到足够的内存空间，则抛出OutOfMemoryError异常<br>这里需要注意当栈的大小越大可分配的线程数就越少。</p>
+</li>
+<li><p>运行时常量池溢出<br>异常信息：java.lang.OutOfMemoryError:PermGen space<br>如果要向运行时常量池中添加内容，最简单的做法就是使用String.intern()这个Native方法。该方法的作用是：如果池中已经包含一个等于此String的字符串，则返回代表池中这个字符串的String对象；否则，将此String对象包含的字符串添加到常量池中，并且返回此String对象的引用。由于常量池分配在方法区内，我们可以通过-XX:PermSize和-XX:MaxPermSize限制方法区的大小，从而间接限制其中常量池的容量。</p>
+</li>
+<li><p>方法区溢出<br>方法区用于存放Class的相关信息，如类名、访问修饰符、常量池、字段描述、方法描述等。<br>异常信息：java.lang.OutOfMemoryError:PermGen space<br>方法区溢出也是一种常见的内存溢出异常，一个类如果要被垃圾收集器回收，判定条件是很苛刻的。在经常动态生成大量Class的应用中，要特别注意这点。</p>
+</li>
 </ol>
 
           
@@ -382,7 +433,7 @@
                 <i class="fa fa-calendar-o"></i>
               </span>
               
-                <span class="post-meta-item-text">Posté le</span>
+                <span class="post-meta-item-text">Posted on</span>
               
               <time title="Post created" itemprop="dateCreated datePublished" datetime="2017-11-17T18:04:28+08:00">
                 2017-11-17
@@ -502,7 +553,7 @@
                 <i class="fa fa-calendar-o"></i>
               </span>
               
-                <span class="post-meta-item-text">Posté le</span>
+                <span class="post-meta-item-text">Posted on</span>
               
               <time title="Post created" itemprop="dateCreated datePublished" datetime="2017-11-17T17:44:11+08:00">
                 2017-11-17
@@ -626,7 +677,7 @@
                 <a href="/archives/">
               
                   <span class="site-state-item-count">3</span>
-                  <span class="site-state-item-name">articles</span>
+                  <span class="site-state-item-name">posts</span>
                 </a>
               </div>
             
@@ -695,7 +746,7 @@
 
 
 
-  <div class="theme-info">Thème &mdash; <a class="theme-link" target="_blank" href="https://github.com/iissnan/hexo-theme-next">NexT.Muse</a> v5.1.3</div>
+  <div class="theme-info">Theme &mdash; <a class="theme-link" target="_blank" href="https://github.com/iissnan/hexo-theme-next">NexT.Muse</a> v5.1.3</div>
 
 
 
